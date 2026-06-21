@@ -225,6 +225,26 @@ func (sa *SloshAnalyzer) calculateSpillProbability(maxTilt, avgTilt, resonanceFa
 		tiltThreshold = 15
 	}
 
+	viscosity := sa.Config.PerfumeViscosity
+	if viscosity <= 0 {
+		viscosity = 0.5
+	}
+	fillRatio := sa.Config.FillRatio
+	if fillRatio <= 0 || fillRatio > 1 {
+		fillRatio = 0.6
+	}
+
+	R := sa.Config.BodyRadius
+	fluidDamping := 8.0 * math.Pi * viscosity * R * R * R * fillRatio
+	maxFluidDamping := 8.0 * math.Pi * 10.0 * R * R * R * 1.0
+	normalizedDamping := fluidDamping / maxFluidDamping
+	if normalizedDamping > 1 {
+		normalizedDamping = 1
+	}
+
+	viscosityReduction := math.Exp(-normalizedDamping * 2.0)
+	fillFactor := 1.0 - 0.5*fillRatio + 0.3*fillRatio*fillRatio
+
 	tiltComponent := 0.0
 	if maxTilt > tiltThreshold*0.3 {
 		tiltComponent = math.Pow((maxTilt-tiltThreshold*0.3)/(tiltThreshold*0.7), 1.5)
@@ -232,7 +252,7 @@ func (sa *SloshAnalyzer) calculateSpillProbability(maxTilt, avgTilt, resonanceFa
 
 	resonanceComponent := 0.0
 	if resonanceFactor > 1.5 {
-		resonanceComponent = math.Pow((resonanceFactor-1.5)/3.0, 1.2)
+		resonanceComponent = math.Pow((resonanceFactor-1.5)/3.0, 1.2) * viscosityReduction
 	}
 
 	avgTiltComponent := 0.0
@@ -240,7 +260,7 @@ func (sa *SloshAnalyzer) calculateSpillProbability(maxTilt, avgTilt, resonanceFa
 		avgTiltComponent = (avgTilt - tiltThreshold*0.2) / (tiltThreshold * 0.8)
 	}
 
-	probability := 0.5*tiltComponent + 0.3*resonanceComponent + 0.2*avgTiltComponent
+	probability := (0.40*tiltComponent + 0.30*resonanceComponent + 0.15*avgTiltComponent) * fillFactor
 
 	if probability < 0 {
 		probability = 0
