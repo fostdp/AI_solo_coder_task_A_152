@@ -1,0 +1,118 @@
+{
+  "description": "被中香炉流体参数配置 [香料与粘合剂]",
+  "reference": "唐代宫廷用香配方复原研究",
+  "perfume_formulas": [
+    {
+      "formula_id": "FORMULA-001",
+      "name": "沉香檀香配方",
+      "description": "唐代宫廷常用，沉檀二香为主",
+      "ingredients": [
+        {"material": "沉香粉", "fraction": 0.4, "viscosity_pas": 0.8},
+        {"material": "檀香粉", "fraction": 0.3, "viscosity_pas": 0.6},
+        {"material": "白芨胶", "fraction": 0.15, "viscosity_pas": 15.0},
+        {"material": "蜂蜜", "fraction": 0.1, "viscosity_pas": 25.0},
+        {"material": "龙脑", "fraction": 0.05, "viscosity_pas": 0.1}
+      ],
+      "base_viscosity_pas": 0.5,
+      "viscosity_temperature_coeff": 0.02,
+      "density_kgm3": 1250.0,
+      "surface_tension_nm": 0.035
+    },
+    {
+      "formula_id": "FORMULA-002",
+      "name": "安息香苏合配方",
+      "description": "西域传入，粘性较强",
+      "ingredients": [
+        {"material": "安息香", "fraction": 0.35, "viscosity_pas": 1.2},
+        {"material": "苏合香", "fraction": 0.25, "viscosity_pas": 1.8},
+        {"material": "白芨胶", "fraction": 0.2, "viscosity_pas": 15.0},
+        {"material": "枣泥", "fraction": 0.15, "viscosity_pas": 8.0},
+        {"material": "乳香", "fraction": 0.05, "viscosity_pas": 0.4}
+      ],
+      "base_viscosity_pas": 0.75,
+      "viscosity_temperature_coeff": 0.015,
+      "density_kgm3": 1320.0,
+      "surface_tension_nm": 0.038
+    },
+    {
+      "formula_id": "FORMULA-003",
+      "name": "百和香配方",
+      "description": "多种香料和合，中等粘度",
+      "ingredients": [
+        {"material": "沉香", "fraction": 0.2, "viscosity_pas": 0.8},
+        {"material": "檀香", "fraction": 0.15, "viscosity_pas": 0.6},
+        {"material": "安息香", "fraction": 0.15, "viscosity_pas": 1.2},
+        {"material": "乳香", "fraction": 0.1, "viscosity_pas": 0.4},
+        {"material": "白芨胶", "fraction": 0.2, "viscosity_pas": 15.0},
+        {"material": "蜂蜜", "fraction": 0.15, "viscosity_pas": 25.0},
+        {"material": "龙脑", "fraction": 0.05, "viscosity_pas": 0.1}
+      ],
+      "base_viscosity_pas": 0.6,
+      "viscosity_temperature_coeff": 0.018,
+      "density_kgm3": 1280.0,
+      "surface_tension_nm": 0.036
+    }
+  ],
+  "slosh_dynamics": {
+    "default_fill_ratio": 0.6,
+    "optimal_fill_ratio": 0.55,
+    "critical_angular_velocity_rps": 3.0,
+    "stokes_damping_coeff": 8.0,
+    "viscosity_damping_exponent": 2.5,
+    "fill_ratio_coefficients": {
+      "linear": -0.5,
+      "quadratic": 0.3
+    }
+  },
+  "motion_profiles": {
+    "walking": {
+      "name": "步行",
+      "frequency_hz": 2.0,
+      "amplitude_mps2": 0.5,
+      "duration_sec": 10.0,
+      "typical_usage": "日常行走",
+      "historical_reference": "唐代宫人日常行走步幅约0.6m，频率约2Hz"
+    },
+    "horse_riding": {
+      "name": "骑马",
+      "frequency_hz": 4.0,
+      "amplitude_mps2": 2.0,
+      "duration_sec": 10.0,
+      "typical_usage": "驿骑出行",
+      "historical_reference": "唐代驿马速度约30km/h，马奔跑频率约4Hz"
+    },
+    "running": {
+      "name": "奔跑",
+      "frequency_hz": 6.0,
+      "amplitude_mps2": 1.5,
+      "duration_sec": 10.0,
+      "typical_usage": "急行传递",
+      "historical_reference": "急行军或紧急传递"
+    },
+    "car_ride": {
+      "name": "乘车",
+      "frequency_hz": 8.0,
+      "amplitude_mps2": 1.0,
+      "duration_sec": 10.0,
+      "typical_usage": "马车出行",
+      "historical_reference": "唐代马车速度约15-20km/h"
+    },
+    "sedan_chair": {
+      "name": "抬轿",
+      "frequency_hz": 1.5,
+      "amplitude_mps2": 0.8,
+      "duration_sec": 10.0,
+      "typical_usage": "贵族出行",
+      "historical_reference": "八抬大轿晃动频率约1.5Hz"
+    },
+    "static": {
+      "name": "静止",
+      "frequency_hz": 0.1,
+      "amplitude_mps2": 0.05,
+      "duration_sec": 10.0,
+      "typical_usage": "静置熏香",
+      "historical_reference": "夜间静置于被中"
+    }
+  },
+  "default_formula": "FORMULA-001"
+}

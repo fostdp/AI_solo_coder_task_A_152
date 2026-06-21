@@ -1,0 +1,66 @@
+{
+  "description": "古代被中香炉机械参数配置 [陕西历史博物馆藏品还原]",
+  "reference": "唐代葡萄花鸟纹银熏球 - 直径4.6cm",
+  "mechanical": {
+    "inner_ring": {
+      "mass_kg": 0.05,
+      "radius_m": 0.04,
+      "rotation_limit_deg": 90.0,
+      "material": "925_sterling_silver"
+    },
+    "outer_ring": {
+      "mass_kg": 0.08,
+      "radius_m": 0.05,
+      "rotation_limit_deg": 90.0,
+      "material": "925_sterling_silver"
+    },
+    "body": {
+      "mass_kg": 0.15,
+      "radius_m": 0.03,
+      "moments_of_inertia": {
+        "I_xx": 0.000054,
+        "I_yy": 0.000054,
+        "I_zz": 0.000054
+      },
+      "material": "bronze_alloy"
+    },
+    "bearings": {
+      "friction_coefficient": 0.05,
+      "damping_coefficient": 0.15,
+      "type": "plain_jewel_bearing"
+    },
+    "environment": {
+      "gravity_mps2": 9.81,
+      "air_viscosity_pas": 0.0000181,
+      "temperature_c": 25.0
+    }
+  },
+  "alarm_thresholds": {
+    "tilt_alarm_deg": 15.0,
+    "tilt_critical_deg": 22.5,
+    "balance_alarm": 0.3,
+    "balance_critical": 0.15,
+    "spill_alarm": 0.5,
+    "spill_critical": 0.65
+  },
+  "presets": [
+    {
+      "code": "CENSER-001",
+      "name": "唐代葡萄花鸟纹银熏球",
+      "description": "陕西历史博物馆藏，1970年西安何家村出土",
+      "scale_factor": 1.0
+    },
+    {
+      "code": "CENSER-002",
+      "name": "唐代鎏金鸿雁纹银熏球",
+      "description": "法门寺地宫出土，鎏金工艺",
+      "scale_factor": 1.1
+    },
+    {
+      "code": "CENSER-003",
+      "name": "复原模型A型",
+      "description": "工艺史团队复原研究模型",
+      "scale_factor": 1.0
+    }
+  ]
+}

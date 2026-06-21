@@ -12,7 +12,11 @@ import (
 	"censer-simulation/models"
 )
 
-var DB *pgxpool.Pool
+var globalDB *DB
+
+type DB struct {
+	pool *pgxpool.Pool
+}
 
 func InitDB() error {
 	connStr := os.Getenv("DATABASE_URL")
@@ -41,17 +45,21 @@ func InitDB() error {
 		return fmt.Errorf("ping database: %w", err)
 	}
 
-	DB = pool
+	globalDB = &DB{pool: pool}
 	return nil
 }
 
+func GetDB() *DB {
+	return globalDB
+}
+
 func CloseDB() {
-	if DB != nil {
-		DB.Close()
+	if globalDB != nil && globalDB.pool != nil {
+		globalDB.pool.Close()
 	}
 }
 
-func InsertSensorData(ctx context.Context, data *models.SensorData) error {
+func (db *DB) InsertSensorData(data *models.SensorData) error {
 	query := `
 		INSERT INTO sensor_data (
 			time, censer_id, inner_ring_angle, outer_ring_angle, body_tilt,
@@ -59,7 +67,7 @@ func InsertSensorData(ctx context.Context, data *models.SensorData) error {
 			body_angular_velocity, temperature, balance_score, spill_risk, raw_data
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
-	_, err := DB.Exec(ctx, query,
+	_, err := db.pool.Exec(context.Background(), query,
 		data.Time, data.CenserID, data.InnerRingAngle, data.OuterRingAngle,
 		data.BodyTilt, data.SloshAcceleration, data.InnerRingVelocity,
 		data.OuterRingVelocity, data.BodyAngularVelocity, data.Temperature,
@@ -68,7 +76,7 @@ func InsertSensorData(ctx context.Context, data *models.SensorData) error {
 	return err
 }
 
-func InsertAlert(ctx context.Context, alert *models.Alert) error {
+func (db *DB) InsertAlert(ctx context.Context, alert *models.Alert) error {
 	query := `
 		INSERT INTO alerts (
 			censer_id, alert_type, severity, message, threshold_value,
@@ -76,16 +84,16 @@ func InsertAlert(ctx context.Context, alert *models.Alert) error {
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
 	`
-	return DB.QueryRow(ctx, query,
+	return db.pool.QueryRow(ctx, query,
 		alert.CenserID, alert.AlertType, alert.Severity, alert.Message,
 		alert.ThresholdValue, alert.ActualValue, alert.SensorDataTime,
 		false, time.Now(),
 	).Scan(&alert.ID)
 }
 
-func GetCensers(ctx context.Context) ([]models.Censer, error) {
+func (db *DB) GetCensers(ctx context.Context) ([]models.Censer, error) {
 	query := `SELECT id, name, code, description, created_at, updated_at FROM censers ORDER BY code`
-	rows, err := DB.Query(ctx, query)
+	rows, err := db.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +111,10 @@ func GetCensers(ctx context.Context) ([]models.Censer, error) {
 	return censers, rows.Err()
 }
 
-func GetCenserByCode(ctx context.Context, code string) (*models.Censer, error) {
+func (db *DB) GetCenserByCode(code string) (*models.Censer, error) {
 	query := `SELECT id, name, code, description, created_at, updated_at FROM censers WHERE code = $1`
 	var c models.Censer
-	err := DB.QueryRow(ctx, query, code).Scan(
+	err := db.pool.QueryRow(context.Background(), query, code).Scan(
 		&c.ID, &c.Name, &c.Code, &c.Description, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
@@ -115,7 +123,7 @@ func GetCenserByCode(ctx context.Context, code string) (*models.Censer, error) {
 	return &c, nil
 }
 
-func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.SimulationConfig, error) {
+func (db *DB) GetSimulationConfig(censerID uuid.UUID) (*models.SimulationConfig, error) {
 	query := `
 		SELECT id, censer_id, inner_ring_mass, outer_ring_mass, body_mass,
 			inner_ring_radius, outer_ring_radius, body_radius, friction_coefficient,
@@ -124,7 +132,7 @@ func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.Simul
 		FROM simulation_configs WHERE censer_id = $1
 	`
 	var cfg models.SimulationConfig
-	err := DB.QueryRow(ctx, query, censerID).Scan(
+	err := db.pool.QueryRow(context.Background(), query, censerID).Scan(
 		&cfg.ID, &cfg.CenserID, &cfg.InnerRingMass, &cfg.OuterRingMass, &cfg.BodyMass,
 		&cfg.InnerRingRadius, &cfg.OuterRingRadius, &cfg.BodyRadius, &cfg.FrictionCoefficient,
 		&cfg.DampingCoefficient, &cfg.Gravity, &cfg.TiltAlarmThreshold, &cfg.BalanceAlarmThreshold,
@@ -136,13 +144,13 @@ func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.Simul
 	return &cfg, nil
 }
 
-func GetLatestSensorData(ctx context.Context) ([]models.LatestSensorData, error) {
+func (db *DB) GetLatestSensorData(ctx context.Context) ([]models.LatestSensorData, error) {
 	query := `
 		SELECT time, censer_id, censer_name, censer_code, inner_ring_angle,
 			outer_ring_angle, body_tilt, slosh_acceleration, balance_score, spill_risk
 		FROM v_latest_sensor_data ORDER BY censer_code
 	`
-	rows, err := DB.Query(ctx, query)
+	rows, err := db.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +170,7 @@ func GetLatestSensorData(ctx context.Context) ([]models.LatestSensorData, error)
 	return results, rows.Err()
 }
 
-func GetSensorDataByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SensorData, error) {
+func (db *DB) GetSensorDataByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SensorData, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -172,7 +180,7 @@ func GetSensorDataByCenser(ctx context.Context, censerID uuid.UUID, limit int) (
 			body_angular_velocity, temperature, balance_score, spill_risk
 		FROM sensor_data WHERE censer_id = $1 ORDER BY time DESC LIMIT $2
 	`
-	rows, err := DB.Query(ctx, query, censerID, limit)
+	rows, err := db.pool.Query(ctx, query, censerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -192,13 +200,13 @@ func GetSensorDataByCenser(ctx context.Context, censerID uuid.UUID, limit int) (
 	return results, rows.Err()
 }
 
-func GetStabilityStats(ctx context.Context) ([]models.StabilityStats, error) {
+func (db *DB) GetStabilityStats(ctx context.Context) ([]models.StabilityStats, error) {
 	query := `
 		SELECT censer_id, censer_name, censer_code, data_points, avg_tilt,
 			max_tilt, min_balance_score, avg_balance_score, avg_spill_risk, max_spill_risk
 		FROM v_stability_stats ORDER BY censer_code
 	`
-	rows, err := DB.Query(ctx, query)
+	rows, err := db.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -218,12 +226,12 @@ func GetStabilityStats(ctx context.Context) ([]models.StabilityStats, error) {
 	return results, rows.Err()
 }
 
-func GetActiveAlerts(ctx context.Context) ([]models.ActiveAlerts, error) {
+func (db *DB) GetActiveAlerts(ctx context.Context) ([]models.ActiveAlerts, error) {
 	query := `
 		SELECT censer_id, censer_name, censer_code, critical_count, warning_count, total_count
 		FROM v_active_alerts ORDER BY censer_code
 	`
-	rows, err := DB.Query(ctx, query)
+	rows, err := db.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +250,7 @@ func GetActiveAlerts(ctx context.Context) ([]models.ActiveAlerts, error) {
 	return results, rows.Err()
 }
 
-func GetAlertsByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.Alert, error) {
+func (db *DB) GetAlertsByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.Alert, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -252,7 +260,7 @@ func GetAlertsByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]mo
 			acknowledged_by, created_at
 		FROM alerts WHERE censer_id = $1 ORDER BY created_at DESC LIMIT $2
 	`
-	rows, err := DB.Query(ctx, query, censerID, limit)
+	rows, err := db.pool.Query(ctx, query, censerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +280,7 @@ func GetAlertsByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]mo
 	return results, rows.Err()
 }
 
-func InsertSloshAnalysis(ctx context.Context, analysis *models.SloshAnalysis) error {
+func (db *DB) InsertSloshAnalysis(ctx context.Context, analysis *models.SloshAnalysis) error {
 	query := `
 		INSERT INTO slosh_analysis (
 			censer_id, analysis_type, motion_type, frequency, amplitude,
@@ -281,7 +289,7 @@ func InsertSloshAnalysis(ctx context.Context, analysis *models.SloshAnalysis) er
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at
 	`
-	return DB.QueryRow(ctx, query,
+	return db.pool.QueryRow(ctx, query,
 		analysis.CenserID, analysis.AnalysisType, analysis.MotionType,
 		analysis.Frequency, analysis.Amplitude, analysis.DampingRatio,
 		analysis.ResonanceFactor, analysis.MaxTiltAngle, analysis.SpillProbability,
@@ -289,7 +297,7 @@ func InsertSloshAnalysis(ctx context.Context, analysis *models.SloshAnalysis) er
 	).Scan(&analysis.ID, &analysis.CreatedAt)
 }
 
-func GetSloshAnalysisByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SloshAnalysis, error) {
+func (db *DB) GetSloshAnalysisByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SloshAnalysis, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -299,7 +307,7 @@ func GetSloshAnalysisByCenser(ctx context.Context, censerID uuid.UUID, limit int
 			balance_efficiency, analysis_data, created_at
 		FROM slosh_analysis WHERE censer_id = $1 ORDER BY created_at DESC LIMIT $2
 	`
-	rows, err := DB.Query(ctx, query, censerID, limit)
+	rows, err := db.pool.Query(ctx, query, censerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -320,11 +328,102 @@ func GetSloshAnalysisByCenser(ctx context.Context, censerID uuid.UUID, limit int
 	return results, rows.Err()
 }
 
-func AcknowledgeAlert(ctx context.Context, alertID uuid.UUID, acknowledgedBy string) error {
+func (db *DB) AcknowledgeAlert(ctx context.Context, alertID uuid.UUID, acknowledgedBy string) error {
 	query := `
 		UPDATE alerts SET acknowledged = TRUE, acknowledged_at = $1, acknowledged_by = $2
 		WHERE id = $3
 	`
-	_, err := DB.Exec(ctx, query, time.Now(), acknowledgedBy, alertID)
+	_, err := db.pool.Exec(ctx, query, time.Now(), acknowledgedBy, alertID)
 	return err
+}
+
+func InsertSensorData(ctx context.Context, data *models.SensorData) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return globalDB.InsertSensorData(data)
+}
+
+func InsertAlert(ctx context.Context, alert *models.Alert) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return globalDB.InsertAlert(ctx, alert)
+}
+
+func GetCensers(ctx context.Context) ([]models.Censer, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetCensers(ctx)
+}
+
+func GetCenserByCode(ctx context.Context, code string) (*models.Censer, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetCenserByCode(code)
+}
+
+func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.SimulationConfig, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetSimulationConfig(censerID)
+}
+
+func GetLatestSensorData(ctx context.Context) ([]models.LatestSensorData, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetLatestSensorData(ctx)
+}
+
+func GetSensorDataByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SensorData, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetSensorDataByCenser(ctx, censerID, limit)
+}
+
+func GetStabilityStats(ctx context.Context) ([]models.StabilityStats, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetStabilityStats(ctx)
+}
+
+func GetActiveAlerts(ctx context.Context) ([]models.ActiveAlerts, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetActiveAlerts(ctx)
+}
+
+func GetAlertsByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.Alert, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetAlertsByCenser(ctx, censerID, limit)
+}
+
+func InsertSloshAnalysis(ctx context.Context, analysis *models.SloshAnalysis) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return globalDB.InsertSloshAnalysis(ctx, analysis)
+}
+
+func GetSloshAnalysisByCenser(ctx context.Context, censerID uuid.UUID, limit int) ([]models.SloshAnalysis, error) {
+	if globalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return globalDB.GetSloshAnalysisByCenser(ctx, censerID, limit)
+}
+
+func AcknowledgeAlert(ctx context.Context, alertID uuid.UUID, acknowledgedBy string) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return globalDB.AcknowledgeAlert(ctx, alertID, acknowledgedBy)
 }

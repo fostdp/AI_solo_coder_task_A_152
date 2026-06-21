@@ -11,11 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"censer-simulation/alert"
+	"censer-simulation/config"
 	"censer-simulation/database"
 	"censer-simulation/models"
-	"censer-simulation/simulation"
-	ws "censer-simulation/websocket"
+	"censer-simulation/services"
 )
 
 var upgrader = websocket.Upgrader{
@@ -27,14 +26,26 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	hub          *ws.Hub
-	alertManager *alert.AlertManager
+	dtuReceiver       *services.DtuReceiver
+	gimbalSimulator   *services.GimbalSimulatorService
+	sloshAnalyzer     *services.SloshAnalyzerService
+	alarmWs           *services.AlarmWsService
+	db                *database.DB
 }
 
-func NewHandler(hub *ws.Hub, alertManager *alert.AlertManager) *Handler {
+func NewHandlerWithServices(
+	dtuReceiver *services.DtuReceiver,
+	gimbalSimulator *services.GimbalSimulatorService,
+	sloshAnalyzer *services.SloshAnalyzerService,
+	alarmWs *services.AlarmWsService,
+	db *database.DB,
+) *Handler {
 	return &Handler{
-		hub:          hub,
-		alertManager: alertManager,
+		dtuReceiver:     dtuReceiver,
+		gimbalSimulator: gimbalSimulator,
+		sloshAnalyzer:   sloshAnalyzer,
+		alarmWs:         alarmWs,
+		db:              db,
 	}
 }
 
@@ -57,85 +68,47 @@ func (h *Handler) PostSensorData(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
-
-	censer, err := database.GetCenserByCode(ctx, req.CenserCode)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Censer not found"})
+	if err := h.dtuReceiver.ValidateAndProcess(c, &req); err != nil {
+		if err.Error() == "censer not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	config, err := database.GetSimulationConfig(ctx, censer.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get simulation config"})
-		return
-	}
-
-	force := &models.ExternalForce{
-		AccelerationX: req.SloshAcceleration * 0.5,
-		AccelerationY: req.SloshAcceleration * 0.3,
-		AccelerationZ: req.SloshAcceleration * 0.2,
-	}
-	sim := simulation.NewGimbalSimulator(config)
-	sim.State.InnerAngle = req.InnerRingAngle
-	sim.State.OuterAngle = req.OuterRingAngle
-	sim.State.BodyAngle = req.BodyTilt
-	if req.InnerRingVelocity != nil {
-		sim.State.InnerVelocity = *req.InnerRingVelocity
-	}
-	if req.OuterRingVelocity != nil {
-		sim.State.OuterVelocity = *req.OuterRingVelocity
-	}
-
-	balanceScore := sim.CalculateBalanceScore()
-	spillRisk := sim.CalculateSpillRisk()
-	_ = force
-
-	sensorData := &models.SensorData{
-		Time:                time.Now(),
-		CenserID:            censer.ID,
-		InnerRingAngle:      req.InnerRingAngle,
-		OuterRingAngle:      req.OuterRingAngle,
-		BodyTilt:            req.BodyTilt,
-		SloshAcceleration:   req.SloshAcceleration,
-		InnerRingVelocity:   req.InnerRingVelocity,
-		OuterRingVelocity:   req.OuterRingVelocity,
-		BodyAngularVelocity: req.BodyAngularVelocity,
-		Temperature:         req.Temperature,
-		BalanceScore:        &balanceScore,
-		SpillRisk:           &spillRisk,
-	}
-
-	if err := database.InsertSensorData(ctx, sensorData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert sensor data"})
-		return
-	}
-
-	h.alertManager.CheckAndAlert(ctx, censer.ID, sensorData, config)
-
-	h.hub.Broadcast("sensor_data", gin.H{
-		"censer_id":            censer.ID,
-		"censer_code":          censer.Code,
-		"censer_name":          censer.Name,
-		"time":                 sensorData.Time,
-		"inner_ring_angle":     req.InnerRingAngle,
-		"outer_ring_angle":     req.OuterRingAngle,
-		"body_tilt":            req.BodyTilt,
-		"slosh_acceleration":   req.SloshAcceleration,
-		"balance_score":        balanceScore,
-		"spill_risk":           spillRisk,
+	c.JSON(http.StatusAccepted, gin.H{
+		"message": "Data accepted and processing",
 	})
+}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"message":        "Data received successfully",
-		"balance_score":  balanceScore,
-		"spill_risk":     spillRisk,
+func (h *Handler) GetMechanicalConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, config.Mechanical)
+}
+
+func (h *Handler) GetFluidConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"formulas":       config.Fluid.Formulas,
+		"slosh_dynamics": config.Fluid.SloshDynamics,
+		"default_formula": config.Fluid.DefaultFormula,
 	})
+}
+
+func (h *Handler) GetMotionProfiles(c *gin.Context) {
+	result := make(map[string]interface{})
+	for key, profile := range config.Fluid.MotionProfiles {
+		result[key] = profile
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *Handler) GetPerfumeFormulas(c *gin.Context) {
+	c.JSON(http.StatusOK, config.Fluid.Formulas)
 }
 
 func (h *Handler) GetCensers(c *gin.Context) {
 	ctx := context.Background()
-	censers, err := database.GetCensers(ctx)
+	censers, err := h.db.GetCensers(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -145,7 +118,7 @@ func (h *Handler) GetCensers(c *gin.Context) {
 
 func (h *Handler) GetLatestSensorData(c *gin.Context) {
 	ctx := context.Background()
-	data, err := database.GetLatestSensorData(ctx)
+	data, err := h.db.GetLatestSensorData(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -168,7 +141,7 @@ func (h *Handler) GetSensorDataByCenser(c *gin.Context) {
 		}
 	}
 
-	data, err := database.GetSensorDataByCenser(ctx, censerID, limit)
+	data, err := h.db.GetSensorDataByCenser(ctx, censerID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -178,7 +151,7 @@ func (h *Handler) GetSensorDataByCenser(c *gin.Context) {
 
 func (h *Handler) GetStabilityStats(c *gin.Context) {
 	ctx := context.Background()
-	stats, err := database.GetStabilityStats(ctx)
+	stats, err := h.db.GetStabilityStats(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -188,7 +161,7 @@ func (h *Handler) GetStabilityStats(c *gin.Context) {
 
 func (h *Handler) GetActiveAlerts(c *gin.Context) {
 	ctx := context.Background()
-	alerts, err := database.GetActiveAlerts(ctx)
+	alerts, err := h.db.GetActiveAlerts(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -211,7 +184,7 @@ func (h *Handler) GetAlertsByCenser(c *gin.Context) {
 		}
 	}
 
-	alerts, err := database.GetAlertsByCenser(ctx, censerID, limit)
+	alerts, err := h.db.GetAlertsByCenser(ctx, censerID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -234,7 +207,7 @@ func (h *Handler) AcknowledgeAlert(c *gin.Context) {
 		req.AcknowledgedBy = "system"
 	}
 
-	if err := database.AcknowledgeAlert(ctx, alertID, req.AcknowledgedBy); err != nil {
+	if err := h.db.AcknowledgeAlert(ctx, alertID, req.AcknowledgedBy); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -250,7 +223,7 @@ func (h *Handler) GetSimulationConfig(c *gin.Context) {
 		return
 	}
 
-	config, err := database.GetSimulationConfig(ctx, censerID)
+	config, err := h.db.GetSimulationConfig(censerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -279,23 +252,24 @@ func (h *Handler) RunSloshAnalysis(c *gin.Context) {
 		return
 	}
 
-	config, err := database.GetSimulationConfig(ctx, censerID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get simulation config"})
-		return
-	}
-
-	analyzer := simulation.NewSloshAnalyzer(config)
 	var result *models.SloshAnalysisResult
 
 	if req.MotionType != nil {
-		result = analyzer.AnalyzeMotion(*req.MotionType)
+		result, err = h.sloshAnalyzer.AnalyzeMotion(censerID.String(), *req.MotionType)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	} else if req.Frequency != nil && req.Amplitude != nil {
 		duration := 10.0
 		if req.Duration != nil {
 			duration = *req.Duration
 		}
-		result = analyzer.AnalyzeCustomMotion(*req.Frequency, *req.Amplitude, duration)
+		result, err = h.sloshAnalyzer.AnalyzeCustomMotion(censerID.String(), *req.Frequency, *req.Amplitude, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Either motion_type or both frequency and amplitude must be provided"})
 		return
@@ -324,7 +298,7 @@ func (h *Handler) RunSloshAnalysis(c *gin.Context) {
 		AnalysisData:      &timeSeriesStr,
 	}
 
-	if err := database.InsertSloshAnalysis(ctx, analysisRecord); err != nil {
+	if err := h.db.InsertSloshAnalysis(ctx, analysisRecord); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save analysis"})
 		return
 	}
@@ -347,7 +321,7 @@ func (h *Handler) GetSloshAnalysisHistory(c *gin.Context) {
 		}
 	}
 
-	history, err := database.GetSloshAnalysisByCenser(ctx, censerID, limit)
+	history, err := h.db.GetSloshAnalysisByCenser(ctx, censerID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -362,14 +336,6 @@ func (h *Handler) GetFrequencyResponse(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid censer ID"})
 		return
 	}
-
-	config, err := database.GetSimulationConfig(ctx, censerID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get simulation config"})
-		return
-	}
-
-	analyzer := simulation.NewSloshAnalyzer(config)
 
 	minFreq := 0.1
 	maxFreq := 20.0
@@ -391,14 +357,23 @@ func (h *Handler) GetFrequencyResponse(c *gin.Context) {
 		}
 	}
 
-	freqs, amps, phases := analyzer.FrequencyResponseAnalysis(minFreq, maxFreq, numPoints)
-	naturalInfo := analyzer.GetNaturalFrequencyInfo()
+	freqs, amps, phases, err := h.sloshAnalyzer.FrequencyResponseAnalysis(censerID.String(), minFreq, maxFreq, numPoints)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	naturalInfo, err := h.sloshAnalyzer.GetNaturalFrequencyInfo(censerID.String())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"frequencies":        freqs,
-		"amplitudes":         amps,
-		"phases":             phases,
-		"natural_frequency":  naturalInfo,
+		"frequencies":       freqs,
+		"amplitudes":        amps,
+		"phases":            phases,
+		"natural_frequency": naturalInfo,
 	})
 }
 
@@ -411,18 +386,12 @@ func (h *Handler) RunGimbalSimulation(c *gin.Context) {
 	}
 
 	var req struct {
-		Duration        float64            `json:"duration" binding:"required"`
-		DT              float64            `json:"dt"`
+		Duration        float64               `json:"duration" binding:"required"`
+		DT              float64               `json:"dt"`
 		ExternalForce   *models.ExternalForce `json:"external_force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	config, err := database.GetSimulationConfig(ctx, censerID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get simulation config"})
 		return
 	}
 
@@ -437,7 +406,11 @@ func (h *Handler) RunGimbalSimulation(c *gin.Context) {
 		}
 	}
 
-	states, tilts := simulation.SimulateGimbalResponse(config, req.ExternalForce, req.Duration, req.DT)
+	states, tilts, err := h.gimbalSimulator.SimulateResponse(censerID.String(), req.ExternalForce, req.Duration, req.DT)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"states": states,
@@ -452,17 +425,19 @@ func (h *Handler) WebSocketEndpoint(c *gin.Context) {
 		return
 	}
 
-	client := ws.NewClient(h.hub, conn)
-	h.hub.register <- client
-
-	go client.WritePump()
-	go client.ReadPump()
+	h.alarmWs.HandleConnection(conn)
 }
 
 func (h *Handler) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status":       "ok",
-		"clients":      h.hub.ClientCount(),
-		"time":         time.Now(),
+		"status":  "ok",
+		"clients": h.alarmWs.ClientCount(),
+		"time":    time.Now(),
+		"services": gin.H{
+			"dtu_receiver":      "running",
+			"gimbal_simulator":  "running",
+			"slosh_analyzer":    "running",
+			"alarm_ws":          "running",
+		},
 	})
 }

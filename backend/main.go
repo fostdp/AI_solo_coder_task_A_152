@@ -8,10 +8,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
-	"censer-simulation/alert"
+	"censer-simulation/config"
 	"censer-simulation/database"
 	"censer-simulation/handlers"
-	ws "censer-simulation/websocket"
+	"censer-simulation/services"
 )
 
 func main() {
@@ -19,21 +19,55 @@ func main() {
 		log.Printf("Warning: .env file not found: %v", err)
 	}
 
+	mechConfigPath := "config/mechanical_params.json"
+	if p := os.Getenv("MECHANICAL_CONFIG"); p != "" {
+		mechConfigPath = p
+	}
+	if _, err := config.LoadMechanicalConfig(mechConfigPath); err != nil {
+		log.Fatalf("Failed to load mechanical config: %v", err)
+	}
+	log.Println("Mechanical config loaded successfully")
+
+	fluidConfigPath := "config/fluid_params.json"
+	if p := os.Getenv("FLUID_CONFIG"); p != "" {
+		fluidConfigPath = p
+	}
+	if _, err := config.LoadFluidConfig(fluidConfigPath); err != nil {
+		log.Fatalf("Failed to load fluid config: %v", err)
+	}
+	log.Println("Fluid config loaded successfully")
+
 	if err := database.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer database.CloseDB()
+	db := database.GetDB()
 	log.Println("Database initialized successfully")
 
-	hub := ws.NewHub()
-	go hub.Run()
-	log.Println("WebSocket hub started")
+	bus := services.NewMessageBus(256)
+	defer bus.Close()
+	log.Println("Message bus initialized")
 
-	alertManager := alert.NewAlertManager(hub)
-	alertManager.StartCleanupRoutine()
-	log.Println("Alert manager started")
+	dtuReceiver := services.NewDtuReceiver(bus, db)
+	dtuReceiver.Start()
+	log.Println("DTU Receiver started")
 
-	h := handlers.NewHandler(hub, alertManager)
+	gimbalSimulator := services.NewGimbalSimulatorService(bus)
+	gimbalSimulator.Start()
+	defer gimbalSimulator.Stop()
+	log.Println("Gimbal Simulator Service started")
+
+	sloshAnalyzer := services.NewSloshAnalyzerService(bus)
+	sloshAnalyzer.Start()
+	defer sloshAnalyzer.Stop()
+	log.Println("Slosh Analyzer Service started")
+
+	alarmWs := services.NewAlarmWsService(bus, db)
+	alarmWs.Start()
+	defer alarmWs.Stop()
+	log.Println("Alarm & WebSocket Service started")
+
+	h := handlers.NewHandlerWithServices(dtuReceiver, gimbalSimulator, sloshAnalyzer, alarmWs, db)
 
 	gin.SetMode(gin.ReleaseMode)
 	if os.Getenv("GIN_MODE") == "debug" {
@@ -53,6 +87,11 @@ func main() {
 	api := r.Group("/api/v1")
 	{
 		api.GET("/health", h.HealthCheck)
+
+		api.GET("/config/mechanical", h.GetMechanicalConfig)
+		api.GET("/config/fluid", h.GetFluidConfig)
+		api.GET("/config/motion-profiles", h.GetMotionProfiles)
+		api.GET("/config/formulas", h.GetPerfumeFormulas)
 
 		api.GET("/censers", h.GetCensers)
 		api.GET("/censers/:id/config", h.GetSimulationConfig)
