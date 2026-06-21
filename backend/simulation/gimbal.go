@@ -38,15 +38,27 @@ func (g *GimbalSimulator) Step(dt float64, force *models.ExternalForce) *models.
 
 func (g *GimbalSimulator) outerRingDynamics(dt float64, force *models.ExternalForce) {
 	I_outer := g.calculateRingMomentOfInertia(g.Config.OuterRingMass, g.Config.OuterRingRadius)
+	outerAngleRad := g.State.OuterAngle * math.Pi / 180.0
+
+	omega_outer := g.State.OuterVelocity * math.Pi / 180.0
+	omega_inner := g.State.InnerVelocity * math.Pi / 180.0
+	omega_body := g.State.BodyVelocity * math.Pi / 180.0
 
 	gravityTorque := g.Config.OuterRingMass * g.Config.Gravity * g.Config.OuterRingRadius *
-		math.Sin(g.State.OuterAngle*math.Pi/180.0)
+		math.Sin(outerAngleRad)
 
 	accelTorque := g.Config.OuterRingMass * g.Config.OuterRingRadius *
 		math.Sqrt(force.AccelerationX*force.AccelerationX+force.AccelerationY*force.AccelerationY) *
-		math.Cos(g.State.OuterAngle*math.Pi/180.0)
+		math.Cos(outerAngleRad)
 
-	angularAccel := (-gravityTorque - accelTorque) / I_outer
+	I_inner := g.calculateRingMomentOfInertia(g.Config.InnerRingMass, g.Config.InnerRingRadius)
+	I_body := (2.0 / 5.0) * g.Config.BodyMass * g.Config.BodyRadius * g.Config.BodyRadius
+	gyroTorque_inner := (I_inner + I_body) * omega_inner * omega_body * math.Sin(outerAngleRad)
+	gyroTorque_body := I_body * omega_body * omega_inner * math.Cos(outerAngleRad)
+	gyroTorque := gyroTorque_inner + gyroTorque_body
+
+	totalTorque := -gravityTorque - accelTorque + gyroTorque
+	angularAccel := totalTorque / I_outer
 
 	g.State.OuterVelocity += angularAccel * dt * (180.0 / math.Pi)
 	g.State.OuterAngle += g.State.OuterVelocity * dt
@@ -58,6 +70,10 @@ func (g *GimbalSimulator) innerRingDynamics(dt float64, force *models.ExternalFo
 	outerAngleRad := g.State.OuterAngle * math.Pi / 180.0
 	innerAngleRad := g.State.InnerAngle * math.Pi / 180.0
 
+	omega_outer := g.State.OuterVelocity * math.Pi / 180.0
+	omega_inner := g.State.InnerVelocity * math.Pi / 180.0
+	omega_body := g.State.BodyVelocity * math.Pi / 180.0
+
 	gravityTorque := g.Config.InnerRingMass * g.Config.Gravity * g.Config.InnerRingRadius *
 		math.Sin(innerAngleRad) * math.Cos(outerAngleRad)
 
@@ -66,26 +82,41 @@ func (g *GimbalSimulator) innerRingDynamics(dt float64, force *models.ExternalFo
 	accelTorque := g.Config.InnerRingMass * g.Config.InnerRingRadius *
 		(accelZ*math.Cos(innerAngleRad) - accelXY*math.Sin(innerAngleRad)*math.Sin(outerAngleRad))
 
-	angularAccel := (-gravityTorque - accelTorque) / I_inner
+	I_body := (2.0 / 5.0) * g.Config.BodyMass * g.Config.BodyRadius * g.Config.BodyRadius
+	gyroTorque_outer := -(I_inner + I_body) * omega_outer * omega_body * math.Sin(outerAngleRad)
+	gyroTorque_body := (I_inner + I_body) * omega_outer * omega_body * math.Cos(outerAngleRad) * math.Sin(innerAngleRad)
+	gyroTorque := gyroTorque_outer + gyroTorque_body
+
+	totalTorque := -gravityTorque - accelTorque + gyroTorque
+	angularAccel := totalTorque / I_inner
 
 	g.State.InnerVelocity += angularAccel * dt * (180.0 / math.Pi)
 	g.State.InnerAngle += g.State.InnerVelocity * dt
 }
 
 func (g *GimbalSimulator) bodyDynamics(dt float64, force *models.ExternalForce) {
-	I_body := (2.0/5.0) * g.Config.BodyMass * g.Config.BodyRadius * g.Config.BodyRadius
+	I_body := (2.0 / 5.0) * g.Config.BodyMass * g.Config.BodyRadius * g.Config.BodyRadius
 
 	innerAngleRad := g.State.InnerAngle * math.Pi / 180.0
 	outerAngleRad := g.State.OuterAngle * math.Pi / 180.0
 	bodyAngleRad := g.State.BodyAngle * math.Pi / 180.0
 
+	omega_outer := g.State.OuterVelocity * math.Pi / 180.0
+	omega_inner := g.State.InnerVelocity * math.Pi / 180.0
+	omega_body := g.State.BodyVelocity * math.Pi / 180.0
+
 	effectiveGravity := g.Config.Gravity * math.Cos(innerAngleRad) * math.Cos(outerAngleRad)
 	gravityTorque := g.Config.BodyMass * effectiveGravity * g.Config.BodyRadius * math.Sin(bodyAngleRad)
 
 	couplingTorque := g.Config.DampingCoefficient *
-		(g.State.InnerVelocity*math.Pi/180.0 + g.State.OuterVelocity*math.Pi/180.0 - g.State.BodyVelocity*math.Pi/180.0)
+		(omega_inner + omega_outer - omega_body)
 
-	angularAccel := (-gravityTorque - couplingTorque) / I_body
+	gyroTorque_outer := -I_body * omega_outer * omega_inner * math.Cos(outerAngleRad) * math.Sin(innerAngleRad)
+	gyroTorque_inner := -I_body * omega_inner * omega_outer * math.Sin(outerAngleRad)
+	gyroTorque := gyroTorque_outer + gyroTorque_inner
+
+	totalTorque := -gravityTorque - couplingTorque + gyroTorque
+	angularAccel := totalTorque / I_body
 
 	g.State.BodyVelocity += angularAccel * dt * (180.0 / math.Pi)
 	g.State.BodyAngle += g.State.BodyVelocity * dt
@@ -209,6 +240,37 @@ func (g *GimbalSimulator) CalculateSpillRisk() float64 {
 		balanceThreshold = 0.3
 	}
 
+	viscosity := g.Config.PerfumeViscosity
+	if viscosity <= 0 {
+		viscosity = 0.5
+	}
+	fillRatio := g.Config.FillRatio
+	if fillRatio <= 0 || fillRatio > 1 {
+		fillRatio = 0.6
+	}
+
+	R := g.Config.BodyRadius
+	fluidDamping := 8.0 * math.Pi * viscosity * R * R * R * fillRatio
+	maxFluidDamping := 8.0 * math.Pi * 10.0 * R * R * R * 1.0
+	normalizedDamping := fluidDamping / maxFluidDamping
+	if normalizedDamping > 1 {
+		normalizedDamping = 1
+	}
+
+	omega_body := math.Abs(g.State.BodyVelocity) * math.Pi / 180.0
+	omega_inner := math.Abs(g.State.InnerVelocity) * math.Pi / 180.0
+	omega_outer := math.Abs(g.State.OuterVelocity) * math.Pi / 180.0
+	totalOmega := omega_body + omega_inner + omega_outer
+
+	criticalOmega := 3.0
+	sloshExcitation := totalOmega / criticalOmega
+	if sloshExcitation > 1 {
+		sloshExcitation = 1
+	}
+
+	fluidDampingFactor := math.Exp(-normalizedDamping * 2.5)
+	fillFactor := 1.0 - 0.6*fillRatio + 0.4*fillRatio*fillRatio
+
 	tiltRisk := 0.0
 	if bodyTilt > tiltThreshold*0.5 {
 		tiltRisk = (bodyTilt - tiltThreshold*0.5) / (tiltThreshold * 0.5)
@@ -225,7 +287,12 @@ func (g *GimbalSimulator) CalculateSpillRisk() float64 {
 		}
 	}
 
-	risk := 0.6*tiltRisk + 0.4*balanceRisk
+	sloshRisk := sloshExcitation * fluidDampingFactor * fillFactor
+	if sloshRisk > 1 {
+		sloshRisk = 1
+	}
+
+	risk := 0.45*tiltRisk + 0.25*balanceRisk + 0.30*sloshRisk
 
 	if risk < 0 {
 		risk = 0
