@@ -61,6 +61,8 @@ type SimulationConfig struct {
 	TiltAlarmThreshold    float64   `json:"tilt_alarm_threshold" db:"tilt_alarm_threshold"`
 	BalanceAlarmThreshold float64   `json:"balance_alarm_threshold" db:"balance_alarm_threshold"`
 	SpillAlarmThreshold   float64   `json:"spill_alarm_threshold" db:"spill_alarm_threshold"`
+	PerfumeViscosity      float64   `json:"perfume_viscosity" db:"perfume_viscosity"`
+	FillRatio             float64   `json:"fill_ratio" db:"fill_ratio"`
 	CreatedAt             time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at" db:"updated_at"`
 }
