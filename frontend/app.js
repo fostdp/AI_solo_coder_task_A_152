@@ -118,16 +118,20 @@ function createGroundGrid() {
 
 function createCenserModel() {
     const outerGroup = new THREE.Group();
+    outerGroup.renderOrder = 1;
     scene.add(outerGroup);
 
     const outerRingGeo = new THREE.TorusGeometry(1.5, 0.04, 16, 80);
-    const wireframeMat = new THREE.MeshBasicMaterial({
+    const outerWireMat = new THREE.MeshBasicMaterial({
         color: 0x22d3ee,
         wireframe: true,
         transparent: true,
-        opacity: 0.7
+        opacity: 0.7,
+        depthWrite: false,
+        depthTest: true
     });
-    const outerRingMesh = new THREE.Mesh(outerRingGeo, wireframeMat);
+    const outerRingMesh = new THREE.Mesh(outerRingGeo, outerWireMat);
+    outerRingMesh.renderOrder = 1;
     outerGroup.add(outerRingMesh);
 
     const outerSolidGeo = new THREE.TorusGeometry(1.5, 0.015, 8, 80);
@@ -136,18 +140,30 @@ function createCenserModel() {
         emissive: 0x0891b2,
         emissiveIntensity: 0.3,
         transparent: true,
-        opacity: 0.5
+        opacity: 0.5,
+        depthWrite: false,
+        depthTest: true
     });
     const outerSolid = new THREE.Mesh(outerSolidGeo, outerSolidMat);
+    outerSolid.renderOrder = 1;
     outerGroup.add(outerSolid);
 
     const innerGroup = new THREE.Group();
+    innerGroup.renderOrder = 2;
     outerGroup.add(innerGroup);
 
     const innerRingGeo = new THREE.TorusGeometry(1.1, 0.035, 16, 70);
-    const innerRingMesh = new THREE.Mesh(innerRingGeo, wireframeMat.clone());
-    innerRingMesh.material.color.setHex(0xa78bfa);
+    const innerWireMat = new THREE.MeshBasicMaterial({
+        color: 0xa78bfa,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+        depthTest: true
+    });
+    const innerRingMesh = new THREE.Mesh(innerRingGeo, innerWireMat);
     innerRingMesh.rotation.x = Math.PI / 2;
+    innerRingMesh.renderOrder = 2;
     innerGroup.add(innerRingMesh);
 
     const innerSolidGeo = new THREE.TorusGeometry(1.1, 0.012, 8, 70);
@@ -156,13 +172,17 @@ function createCenserModel() {
         emissive: 0x7c3aed,
         emissiveIntensity: 0.3,
         transparent: true,
-        opacity: 0.5
+        opacity: 0.5,
+        depthWrite: false,
+        depthTest: true
     });
     const innerSolid = new THREE.Mesh(innerSolidGeo, innerSolidMat);
     innerSolid.rotation.x = Math.PI / 2;
+    innerSolid.renderOrder = 2;
     innerGroup.add(innerSolid);
 
     const bodyGroup = new THREE.Group();
+    bodyGroup.renderOrder = 3;
     innerGroup.add(bodyGroup);
 
     const bodyGeo = new THREE.SphereGeometry(0.55, 48, 32);
@@ -173,9 +193,12 @@ function createCenserModel() {
         shininess: 80,
         specular: 0xf4d487,
         transparent: true,
-        opacity: 0.92
+        opacity: 0.92,
+        depthWrite: true,
+        depthTest: true
     });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.renderOrder = 3;
     bodyGroup.add(body);
 
     const shellGeo = new THREE.SphereGeometry(0.58, 48, 32, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -186,19 +209,25 @@ function createCenserModel() {
         shininess: 100,
         transparent: true,
         opacity: 0.35,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: true
     });
     const shell = new THREE.Mesh(shellGeo, shellMat);
+    shell.renderOrder = 4;
     bodyGroup.add(shell);
 
     const glowGeo = new THREE.SphereGeometry(0.25, 24, 24);
     const glowMat = new THREE.MeshBasicMaterial({
         color: 0xff6600,
         transparent: true,
-        opacity: 0.85
+        opacity: 0.85,
+        depthWrite: false,
+        depthTest: true
     });
     const glow = new THREE.Mesh(glowGeo, glowMat);
     glow.position.y = -0.1;
+    glow.renderOrder = 5;
     bodyGroup.add(glow);
 
     const light = new THREE.PointLight(0xff5500, 1.5, 4);
@@ -217,13 +246,16 @@ function addDecorativePattern(group) {
         color: 0xf4d487,
         emissive: 0x92400e,
         emissiveIntensity: 0.3,
-        shininess: 120
+        shininess: 120,
+        depthWrite: true,
+        depthTest: true
     });
 
     for (let i = 0; i < 12; i++) {
         const angle = (i / 12) * Math.PI * 2;
         const dotGeo = new THREE.SphereGeometry(0.025, 12, 12);
         const dot = new THREE.Mesh(dotGeo, patternMat);
+        dot.renderOrder = 4;
         dot.position.set(
             Math.cos(angle) * 0.5,
             0.2,
@@ -300,6 +332,10 @@ function updateConfigDisplay(cfg) {
     document.getElementById('cfg-damping').textContent = cfg.damping_coefficient.toFixed(3);
     document.getElementById('cfg-friction').textContent = cfg.friction_coefficient.toFixed(3);
     document.getElementById('cfg-tilt-th').textContent = cfg.tilt_alarm_threshold.toFixed(1) + '°';
+    const viscosity = cfg.perfume_viscosity != null ? cfg.perfume_viscosity : 0.5;
+    const fillRatio = cfg.fill_ratio != null ? cfg.fill_ratio : 0.6;
+    document.getElementById('cfg-viscosity').textContent = viscosity.toFixed(3) + ' Pa·s';
+    document.getElementById('cfg-fill-ratio').textContent = (fillRatio * 100).toFixed(0) + '%';
 }
 
 async function loadLatestData(censerId) {
