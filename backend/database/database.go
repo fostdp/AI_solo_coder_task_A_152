@@ -120,7 +120,7 @@ func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.Simul
 		SELECT id, censer_id, inner_ring_mass, outer_ring_mass, body_mass,
 			inner_ring_radius, outer_ring_radius, body_radius, friction_coefficient,
 			damping_coefficient, gravity, tilt_alarm_threshold, balance_alarm_threshold,
-			spill_alarm_threshold, created_at, updated_at
+			spill_alarm_threshold, perfume_viscosity, fill_ratio, created_at, updated_at
 		FROM simulation_configs WHERE censer_id = $1
 	`
 	var cfg models.SimulationConfig
@@ -128,7 +128,7 @@ func GetSimulationConfig(ctx context.Context, censerID uuid.UUID) (*models.Simul
 		&cfg.ID, &cfg.CenserID, &cfg.InnerRingMass, &cfg.OuterRingMass, &cfg.BodyMass,
 		&cfg.InnerRingRadius, &cfg.OuterRingRadius, &cfg.BodyRadius, &cfg.FrictionCoefficient,
 		&cfg.DampingCoefficient, &cfg.Gravity, &cfg.TiltAlarmThreshold, &cfg.BalanceAlarmThreshold,
-		&cfg.SpillAlarmThreshold, &cfg.CreatedAt, &cfg.UpdatedAt,
+		&cfg.SpillAlarmThreshold, &cfg.PerfumeViscosity, &cfg.FillRatio, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
