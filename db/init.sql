@@ -86,9 +86,23 @@ CREATE TABLE IF NOT EXISTS simulation_configs (
     tilt_alarm_threshold DOUBLE PRECISION NOT NULL DEFAULT 15.0,
     balance_alarm_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.3,
     spill_alarm_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    perfume_viscosity DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    fill_ratio DOUBLE PRECISION NOT NULL DEFAULT 0.6,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='simulation_configs' AND column_name='perfume_viscosity') THEN
+        ALTER TABLE simulation_configs ADD COLUMN perfume_viscosity DOUBLE PRECISION NOT NULL DEFAULT 0.5;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='simulation_configs' AND column_name='fill_ratio') THEN
+        ALTER TABLE simulation_configs ADD COLUMN fill_ratio DOUBLE PRECISION NOT NULL DEFAULT 0.6;
+    END IF;
+END $$;
 
 -- ============================================================
 -- 抗晃荡分析结果表
