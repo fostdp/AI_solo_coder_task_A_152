@@ -247,3 +247,128 @@ DROP TRIGGER IF EXISTS configs_update_updated_at ON simulation_configs;
 CREATE TRIGGER configs_update_updated_at
     BEFORE UPDATE ON simulation_configs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================
+-- 连续聚合：1小时聚合
+-- ============================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_data_1h
+WITH (timescaledb.continuous) AS
+SELECT
+    censer_id,
+    time_bucket('1 hour', time) AS bucket,
+    AVG(inner_ring_angle) AS avg_inner_ring_angle,
+    MAX(ABS(inner_ring_angle)) AS max_inner_ring_angle,
+    AVG(outer_ring_angle) AS avg_outer_ring_angle,
+    MAX(ABS(outer_ring_angle)) AS max_outer_ring_angle,
+    AVG(body_tilt) AS avg_body_tilt,
+    MAX(ABS(body_tilt)) AS max_body_tilt,
+    AVG(slosh_acceleration) AS avg_slosh_acceleration,
+    MAX(slosh_acceleration) AS max_slosh_acceleration,
+    AVG(balance_score) AS avg_balance_score,
+    MIN(balance_score) AS min_balance_score,
+    AVG(spill_risk) AS avg_spill_risk,
+    MAX(spill_risk) AS max_spill_risk,
+    COUNT(*) AS sample_count
+FROM sensor_data
+GROUP BY censer_id, time_bucket('1 hour', time)
+WITH NO DATA;
+
+ALTER MATERIALIZED VIEW sensor_data_1h SET (timescaledb.materialized_only = false);
+
+-- ============================================================
+-- 连续聚合：1天聚合
+-- ============================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_data_1d
+WITH (timescaledb.continuous) AS
+SELECT
+    censer_id,
+    time_bucket('1 day', time) AS bucket,
+    AVG(inner_ring_angle) AS avg_inner_ring_angle,
+    MAX(ABS(inner_ring_angle)) AS max_inner_ring_angle,
+    AVG(outer_ring_angle) AS avg_outer_ring_angle,
+    MAX(ABS(outer_ring_angle)) AS max_outer_ring_angle,
+    AVG(body_tilt) AS avg_body_tilt,
+    MAX(ABS(body_tilt)) AS max_body_tilt,
+    AVG(slosh_acceleration) AS avg_slosh_acceleration,
+    MAX(slosh_acceleration) AS max_slosh_acceleration,
+    AVG(balance_score) AS avg_balance_score,
+    MIN(balance_score) AS min_balance_score,
+    AVG(spill_risk) AS avg_spill_risk,
+    MAX(spill_risk) AS max_spill_risk,
+    COUNT(*) AS sample_count
+FROM sensor_data
+GROUP BY censer_id, time_bucket('1 day', time)
+WITH NO DATA;
+
+ALTER MATERIALIZED VIEW sensor_data_1d SET (timescaledb.materialized_only = false);
+
+-- ============================================================
+-- 数据保留策略
+-- ============================================================
+-- 原始数据：保留7天
+SELECT add_retention_policy('sensor_data', INTERVAL '7 days', if_not_exists => TRUE);
+
+-- 5分钟聚合：保留30天
+SELECT add_retention_policy('sensor_data_5m', INTERVAL '30 days', if_not_exists => TRUE);
+
+-- 1小时聚合：保留1年
+SELECT add_retention_policy('sensor_data_1h', INTERVAL '1 year', if_not_exists => TRUE);
+
+-- 1天聚合：永久保留（不设置保留策略）
+
+-- ============================================================
+-- 连续聚合自动刷新策略
+-- ============================================================
+-- 5分钟聚合：每5分钟刷新一次，刷新最近1小时数据
+SELECT add_continuous_aggregate_policy(
+    'sensor_data_5m',
+    start_offset => INTERVAL '1 hour',
+    end_offset => INTERVAL '5 minutes',
+    schedule_interval => INTERVAL '5 minutes',
+    if_not_exists => TRUE
+);
+
+-- 1小时聚合：每30分钟刷新一次，刷新最近6小时数据
+SELECT add_continuous_aggregate_policy(
+    'sensor_data_1h',
+    start_offset => INTERVAL '6 hours',
+    end_offset => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '30 minutes',
+    if_not_exists => TRUE
+);
+
+-- 1天聚合：每6小时刷新一次，刷新最近2天数据
+SELECT add_continuous_aggregate_policy(
+    'sensor_data_1d',
+    start_offset => INTERVAL '2 days',
+    end_offset => INTERVAL '1 day',
+    schedule_interval => INTERVAL '6 hours',
+    if_not_exists => TRUE
+);
+
+-- ============================================================
+-- 告警数据保留策略
+-- ============================================================
+-- 注意：alerts 表非hypertable，保留策略需通过pg_cron定期清理
+-- 建议保留90天告警记录，以下SQL可配合pg_cron使用：
+-- SELECT cron.schedule('clean-old-alerts', '0 2 * * *', 
+--   $$DELETE FROM alerts WHERE created_at < NOW() - INTERVAL ''90 days'';$$);
+-- ============================================================
+
+-- ============================================================
+-- 压缩策略（可选，节省存储空间）
+-- ============================================================
+-- 原始数据：3天后压缩
+-- 注意：压缩后数据为只读，会影响某些查询性能
+-- SELECT add_compression_policy('sensor_data', INTERVAL '3 days', if_not_exists => TRUE);
+
+-- ============================================================
+-- 数据降采样层级总结
+-- ============================================================
+-- | 聚合粒度 | 保留时长  | 刷新间隔  |
+-- |----------|-----------|-----------|
+-- | raw      | 7天       | -         |
+-- | 5分钟    | 30天      | 5分钟     |
+-- | 1小时    | 1年       | 30分钟    |
+-- | 1天      | 永久      | 6小时     |
+-- ============================================================

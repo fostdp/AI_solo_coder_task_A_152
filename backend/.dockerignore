@@ -1,0 +1,17 @@
+.git
+.gitignore
+*.md
+*.txt
+tests/
+testdata/
+docs/
+*.db
+*.sqlite
+node_modules/
+vendor/
+.idea/
+.vscode/
+*.exe
+*.dll
+*.so
+*.dylib

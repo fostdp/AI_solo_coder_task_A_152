@@ -12,6 +12,7 @@ import (
 
 	"censer-simulation/config"
 	"censer-simulation/database"
+	"censer-simulation/metrics"
 	"censer-simulation/models"
 )
 
@@ -257,6 +258,7 @@ func (s *AlarmWsService) createAlert(sloshMsg *SloshResultMessage, alertType, se
 }
 
 func (s *AlarmWsService) dispatchAlert(alert *AlertMessage) {
+	metrics.RecordAlert(alert.AlertType, alert.Severity)
 	dbAlert := &models.Alert{
 		ID:             alert.ID,
 		CenserID:       alert.CenserID,

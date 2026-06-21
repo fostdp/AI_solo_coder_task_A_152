@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"censer-simulation/database"
+	"censer-simulation/metrics"
 	"censer-simulation/models"
 )
 
@@ -18,6 +19,8 @@ type DtuReceiver struct {
 	running     bool
 	ctx         context.Context
 	cancel      context.CancelFunc
+	mqttEnabled bool
+	mqttReceiver *MqttReceiver
 }
 
 func NewDtuReceiver(bus *MessageBus, db *database.DB) *DtuReceiver {
@@ -32,11 +35,26 @@ func NewDtuReceiver(bus *MessageBus, db *database.DB) *DtuReceiver {
 
 func (r *DtuReceiver) Start() {
 	r.running = true
+	if r.mqttEnabled && r.mqttReceiver != nil {
+		go func() {
+			if err := r.mqttReceiver.Start(); err != nil {
+				fmt.Printf("[dtu] MQTT start failed: %v\n", err)
+			}
+		}()
+	}
 }
 
 func (r *DtuReceiver) Stop() {
 	r.running = false
 	r.cancel()
+	if r.mqttReceiver != nil {
+		r.mqttReceiver.Stop()
+	}
+}
+
+func (r *DtuReceiver) EnableMQTT(broker, topic, clientID string) {
+	r.mqttEnabled = true
+	r.mqttReceiver = NewMqttReceiver(r, broker, topic, clientID)
 }
 
 func (r *DtuReceiver) ValidateAndProcess(c *gin.Context, req *models.SensorDataRequest) error {
@@ -44,91 +62,21 @@ func (r *DtuReceiver) ValidateAndProcess(c *gin.Context, req *models.SensorDataR
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	censer, err := r.db.GetCenserByCode(req.CenserCode)
-	if err != nil {
-		return fmt.Errorf("get censer: %w", err)
-	}
-	if censer == nil {
-		return fmt.Errorf("censer not found: %s", req.CenserCode)
-	}
-
-	config, err := r.db.GetSimulationConfig(censer.ID)
-	if err != nil {
-		return fmt.Errorf("get config: %w", err)
-	}
-	if config == nil {
-		return fmt.Errorf("simulation config not found for censer: %s", req.CenserCode)
-	}
-
-	force := &models.ExternalForce{
-		AccelerationX: req.SloshAcceleration * 0.3,
-		AccelerationY: req.SloshAcceleration * 0.4,
-		AccelerationZ: req.SloshAcceleration * 0.5,
-		Temperature:   req.Temperature,
-	}
-
-	innerVel := req.InnerRingVelocity
-	outerVel := req.OuterRingVelocity
-	bodyVel := req.BodyAngularVelocity
-	if innerVel == nil {
-		v := 0.0
-		innerVel = &v
-	}
-	if outerVel == nil {
-		v := 0.0
-		outerVel = &v
-	}
-	if bodyVel == nil {
-		v := 0.0
-		bodyVel = &v
-	}
-	temp := req.Temperature
-	if temp == nil {
-		t := 25.0
-		temp = &t
-	}
-
-	sensorDataID := uuid.New()
-	now := time.Now().UTC()
-
-	sensorData := &models.SensorData{
-		ID:                  sensorDataID,
-		CenserID:            censer.ID,
-		Timestamp:           now,
+	raw := &rawSensorInput{
+		CenserCode:          req.CenserCode,
 		InnerRingAngle:      req.InnerRingAngle,
 		OuterRingAngle:      req.OuterRingAngle,
 		BodyTilt:            req.BodyTilt,
 		SloshAcceleration:   req.SloshAcceleration,
-		InnerRingVelocity:   *innerVel,
-		OuterRingVelocity:   *outerVel,
-		BodyAngularVelocity: *bodyVel,
-		Temperature:         *temp,
-		CreatedAt:           now,
+		InnerRingVelocity:   req.InnerRingVelocity,
+		OuterRingVelocity:   req.OuterRingVelocity,
+		BodyAngularVelocity: req.BodyAngularVelocity,
+		Temperature:         req.Temperature,
 	}
 
-	rawMsg := &SensorRawMessage{
-		Time:                now,
-		CenserID:            censer.ID,
-		CenserCode:          censer.Code,
-		CenserName:          censer.Name,
-		InnerRingAngle:      req.InnerRingAngle,
-		OuterRingAngle:      req.OuterRingAngle,
-		BodyTilt:            req.BodyTilt,
-		SloshAcceleration:   req.SloshAcceleration,
-		InnerRingVelocity:   innerVel,
-		OuterRingVelocity:   outerVel,
-		BodyAngularVelocity: bodyVel,
-		Temperature:         temp,
-		Force:               force,
-		Config:              config,
-		SensorDataID:        sensorDataID,
-		SensorData:          sensorData,
-	}
-
-	select {
-	case r.bus.SensorRawCh <- rawMsg:
-	case <-time.After(100 * time.Millisecond):
-		return fmt.Errorf("message bus full, dropping sensor data")
+	censer, sensorDataID, err := r.processRaw(raw)
+	if err != nil {
+		return err
 	}
 
 	c.Set("censer", censer)
@@ -183,4 +131,109 @@ func (r *DtuReceiver) validateRequest(req *models.SensorDataRequest) error {
 	}
 
 	return nil
+}
+
+type rawSensorInput struct {
+	CenserCode          string
+	InnerRingAngle      float64
+	OuterRingAngle      float64
+	BodyTilt            float64
+	SloshAcceleration   float64
+	InnerRingVelocity   *float64
+	OuterRingVelocity   *float64
+	BodyAngularVelocity *float64
+	Temperature         *float64
+}
+
+func (r *DtuReceiver) processRaw(raw *rawSensorInput) (*models.Censer, uuid.UUID, error) {
+	censer, err := r.db.GetCenserByCode(raw.CenserCode)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("get censer: %w", err)
+	}
+	if censer == nil {
+		return nil, uuid.Nil, fmt.Errorf("censer not found: %s", raw.CenserCode)
+	}
+
+	config, err := r.db.GetSimulationConfig(censer.ID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("get config: %w", err)
+	}
+	if config == nil {
+		return nil, uuid.Nil, fmt.Errorf("simulation config not found for censer: %s", raw.CenserCode)
+	}
+
+	force := &models.ExternalForce{
+		AccelerationX: raw.SloshAcceleration * 0.3,
+		AccelerationY: raw.SloshAcceleration * 0.4,
+		AccelerationZ: raw.SloshAcceleration * 0.5,
+		Temperature:   raw.Temperature,
+	}
+
+	innerVel := raw.InnerRingVelocity
+	outerVel := raw.OuterRingVelocity
+	bodyVel := raw.BodyAngularVelocity
+	if innerVel == nil {
+		v := 0.0
+		innerVel = &v
+	}
+	if outerVel == nil {
+		v := 0.0
+		outerVel = &v
+	}
+	if bodyVel == nil {
+		v := 0.0
+		bodyVel = &v
+	}
+	temp := raw.Temperature
+	if temp == nil {
+		t := 25.0
+		temp = &t
+	}
+
+	sensorDataID := uuid.New()
+	now := time.Now().UTC()
+
+	sensorData := &models.SensorData{
+		ID:                  sensorDataID,
+		CenserID:            censer.ID,
+		Timestamp:           now,
+		InnerRingAngle:      raw.InnerRingAngle,
+		OuterRingAngle:      raw.OuterRingAngle,
+		BodyTilt:            raw.BodyTilt,
+		SloshAcceleration:   raw.SloshAcceleration,
+		InnerRingVelocity:   *innerVel,
+		OuterRingVelocity:   *outerVel,
+		BodyAngularVelocity: *bodyVel,
+		Temperature:         *temp,
+		CreatedAt:           now,
+	}
+
+	rawMsg := &SensorRawMessage{
+		Time:                now,
+		CenserID:            censer.ID,
+		CenserCode:          censer.Code,
+		CenserName:          censer.Name,
+		InnerRingAngle:      raw.InnerRingAngle,
+		OuterRingAngle:      raw.OuterRingAngle,
+		BodyTilt:            raw.BodyTilt,
+		SloshAcceleration:   raw.SloshAcceleration,
+		InnerRingVelocity:   innerVel,
+		OuterRingVelocity:   outerVel,
+		BodyAngularVelocity: bodyVel,
+		Temperature:         temp,
+		Force:               force,
+		Config:              config,
+		SensorDataID:        sensorDataID,
+		SensorData:          sensorData,
+	}
+
+	select {
+	case r.bus.SensorRawCh <- rawMsg:
+	default:
+		return nil, uuid.Nil, fmt.Errorf("message bus full, dropping sensor data")
+	}
+
+	metrics.RecordSensorData(censer.Code)
+
+	return censer, sensorDataID, nil
 }

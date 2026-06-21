@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"censer-simulation/config"
+	"censer-simulation/metrics"
 	"censer-simulation/models"
 	"censer-simulation/simulation"
 )
@@ -84,6 +85,9 @@ func (s *GimbalSimulatorService) processSensorData(msg *SensorRawMessage) {
 
 	bodyTilt := sim.CalculateBodyTilt()
 	balanceScore := sim.CalculateBalanceScore()
+
+	metrics.SetBalanceScore(msg.CenserCode, balanceScore)
+	metrics.SetTiltAngle(msg.CenserCode, bodyTilt)
 
 	balanceMsg := &BalanceResultMessage{
 		Time:          msg.Time,

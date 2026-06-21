@@ -1,0 +1,182 @@
+version: "3.8"
+
+services:
+  # =========================================
+  # TimescaleDB 数据库
+  # =========================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: censer-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-censer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-censer123}
+      POSTGRES_DB: ${POSTGRES_DB:-censer_simulation}
+      TZ: Asia/Shanghai
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-censer} -d ${POSTGRES_DB:-censer_simulation}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - censer-net
+
+  # =========================================
+  # Mosquitto MQTT Broker
+  # =========================================
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: censer-mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_WS_PORT:-9001}:9001"
+    volumes:
+      - ./docker/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/version' -C 1 -W 3 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - censer-net
+
+  # =========================================
+  # Go 后端服务
+  # =========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: censer-backend
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    environment:
+      GIN_MODE: ${GIN_MODE:-release}
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-censer}:${POSTGRES_PASSWORD:-censer123}@timescaledb:5432/${POSTGRES_DB:-censer_simulation}?sslmode=disable
+      MQTT_BROKER: tcp://mosquitto:1883
+      MQTT_TOPIC: ${MQTT_TOPIC:-censer/sensor/#}
+      MQTT_CLIENT_ID: censer-backend
+      FRONTEND_PATH: /app/frontend
+      TZ: Asia/Shanghai
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - ./frontend:/app/frontend:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - censer-net
+
+  # =========================================
+  # Python 传感器模拟器
+  # =========================================
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: censer-simulator
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      CENSER_CODE: ${SIM_CENSER_CODE:-CENSER-001}
+      MOTION_PROFILE: ${SIM_MOTION:-walking}
+      INTERVAL: ${SIM_INTERVAL:-60}
+      API_BASE: http://backend:8080/api/v1
+      MQTT_BROKER: tcp://mosquitto:1883
+      MQTT_TOPIC: ${MQTT_TOPIC:-censer/sensor}
+      TZ: Asia/Shanghai
+    command: >
+      --censer ${SIM_CENSER_CODE:-CENSER-001}
+      --motion ${SIM_MOTION:-walking}
+      --interval ${SIM_INTERVAL:-60}
+      --api http://backend:8080/api/v1
+      --mqtt-broker tcp://mosquitto:1883
+      --mqtt-topic ${MQTT_TOPIC:-censer/sensor}
+    networks:
+      - censer-net
+
+  # =========================================
+  # Nginx 前端代理 + Gzip 压缩
+  # =========================================
+  nginx:
+    image: nginx:alpine
+    container_name: censer-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - censer-net
+
+  # =========================================
+  # Prometheus 监控
+  # =========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: censer-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - censer-net
+
+# =========================================
+# 网络
+# =========================================
+networks:
+  censer-net:
+    driver: bridge
+    name: censer-net
+
+# =========================================
+# 数据卷
+# =========================================
+volumes:
+  timescaledb_data:
+    driver: local
+  mosquitto_data:
+    driver: local
+  mosquitto_log:
+    driver: local
+  prometheus_data:
+    driver: local

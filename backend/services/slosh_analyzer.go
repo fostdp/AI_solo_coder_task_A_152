@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"censer-simulation/config"
+	"censer-simulation/metrics"
 	"censer-simulation/models"
 	"censer-simulation/simulation"
 )
@@ -61,6 +62,8 @@ func (s *SloshAnalyzerService) processBalanceResult(msg *BalanceResultMessage) {
 	bodyVel := msg.BodyVelocity
 
 	spillRisk := s.calculateRealTimeSpillRisk(analyzer, msg)
+
+	metrics.SetSpillRisk(msg.CenserCode, spillRisk)
 
 	R := analyzer.Config.BodyRadius
 	viscosity := analyzer.Config.PerfumeViscosity

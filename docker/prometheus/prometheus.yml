@@ -1,0 +1,30 @@
+# Prometheus Configuration
+# 古代被中香炉仿真系统监控
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  external_labels:
+    cluster: censer-simulation
+    environment: production
+
+rule_files:
+  # - "alerts.yml"
+
+scrape_configs:
+  - job_name: 'censer-backend'
+    static_configs:
+      - targets: ['backend:8080']
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 以下是我写prometheus我写
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']

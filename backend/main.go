@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"net/http/pprof"
 	"os"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -11,6 +13,8 @@ import (
 	"censer-simulation/config"
 	"censer-simulation/database"
 	"censer-simulation/handlers"
+	"censer-simulation/metrics"
+	"censer-simulation/middleware"
 	"censer-simulation/services"
 )
 
@@ -49,6 +53,18 @@ func main() {
 	log.Println("Message bus initialized")
 
 	dtuReceiver := services.NewDtuReceiver(bus, db)
+
+	mqttBroker := os.Getenv("MQTT_BROKER")
+	mqttTopic := os.Getenv("MQTT_TOPIC")
+	mqttClientID := os.Getenv("MQTT_CLIENT_ID")
+	if mqttClientID == "" {
+		mqttClientID = "censer-backend"
+	}
+	if mqttBroker != "" && mqttTopic != "" {
+		dtuReceiver.EnableMQTT(mqttBroker, mqttTopic, mqttClientID)
+		log.Printf("MQTT receiver enabled: broker=%s, topic=%s", mqttBroker, mqttTopic)
+	}
+
 	dtuReceiver.Start()
 	log.Println("DTU Receiver started")
 
@@ -67,6 +83,8 @@ func main() {
 	defer alarmWs.Stop()
 	log.Println("Alarm & WebSocket Service started")
 
+	go updateMetrics(alarmWs)
+
 	h := handlers.NewHandlerWithServices(dtuReceiver, gimbalSimulator, sloshAnalyzer, alarmWs, db)
 
 	gin.SetMode(gin.ReleaseMode)
@@ -74,7 +92,11 @@ func main() {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(gin.Logger())
+	r.Use(middleware.Gzip())
+	r.Use(metrics.PrometheusMiddleware())
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -113,7 +135,35 @@ func main() {
 		api.POST("/censers/:id/gimbal-simulation", h.RunGimbalSimulation)
 	}
 
+	r.GET("/metrics", metrics.PrometheusHandler())
+
+	pprofGroup := r.Group("/debug/pprof")
+	{
+		pprofGroup.GET("/", gin.WrapF(pprof.Index))
+		pprofGroup.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+		pprofGroup.GET("/profile", gin.WrapF(pprof.Profile))
+		pprofGroup.POST("/symbol", gin.WrapF(pprof.Symbol))
+		pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
+		pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
+		pprofGroup.GET("/allocs", gin.WrapH(pprof.Handler("allocs")))
+		pprofGroup.GET("/block", gin.WrapH(pprof.Handler("block")))
+		pprofGroup.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+		pprofGroup.GET("/heap", gin.WrapH(pprof.Handler("heap")))
+		pprofGroup.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
+		pprofGroup.GET("/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+	}
+
 	r.GET("/ws", h.WebSocketEndpoint)
+
+	frontendPath := os.Getenv("FRONTEND_PATH")
+	if frontendPath == "" {
+		frontendPath = "../frontend"
+	}
+	r.Static("/static", frontendPath+"/static")
+	r.StaticFile("/", frontendPath+"/index.html")
+	r.StaticFile("/app.js", frontendPath+"/app.js")
+	r.Static("/js", frontendPath+"/js")
+	r.Static("/css", frontendPath+"/css")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -123,5 +173,14 @@ func main() {
 	log.Printf("Server starting on port %s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func updateMetrics(alarmWs *services.AlarmWsService) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		metrics.SetWebSocketClients(float64(alarmWs.ClientCount()))
 	}
 }
